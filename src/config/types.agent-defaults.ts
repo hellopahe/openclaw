@@ -8,6 +8,22 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+/**
+ * Supervisor configuration for draft review
+ */
+export type AgentSupervisorConfig = {
+  /** Enable supervisor (default: false) */
+  enabled?: boolean;
+  /** Maximum number of review passes (default: 3) */
+  maxPasses?: number;
+  /** Tools to deny in worker draft mode */
+  workerToolDeny?: string[];
+  /** Extra prompt to add to reviewer */
+  extraReviewerPrompt?: string;
+  /** Maximum reject history to pass to reviewer (default: 3) */
+  maxRejectHistory?: number;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -284,6 +300,8 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Supervisor configuration for draft review before sending to users */
+  supervisor?: AgentSupervisorConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

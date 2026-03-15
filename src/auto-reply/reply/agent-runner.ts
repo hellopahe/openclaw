@@ -3,7 +3,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { queueEmbeddedPiMessage, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -30,6 +30,8 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
+import type { AgentRunLoopResult } from "./agent-runner-execution.js";
+import type { RuntimeFallbackAttempt } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -55,6 +57,8 @@ import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queu
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { runSupervisedReplyTurn } from "./supervisor-controller.js";
+import { resolveSupervisorConfig, shouldBypassSupervisor } from "./supervisor-policy.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -344,42 +348,118 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
-    const runOutcome = await runAgentTurnWithFallback({
-      commandBody,
+
+    // Check if supervisor should be enabled
+    const isCli = isCliProvider(followupRun.run.provider, followupRun.run.config);
+    const supervisorBypass = shouldBypassSupervisor({
       followupRun,
-      sessionCtx,
-      opts,
-      typingSignals,
-      blockReplyPipeline,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      applyReplyToMode,
-      shouldEmitToolResult,
-      shouldEmitToolOutput,
-      pendingToolTasks,
-      resetSessionAfterCompactionFailure,
-      resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
-      sessionKey,
-      getActiveSessionEntry: () => activeSessionEntry,
-      activeSessionStore,
-      storePath,
-      resolvedVerboseLevel,
+      isCliProvider: isCli,
     });
+
+    let runOutcome!: AgentRunLoopResult;
+    let supervisorCompleted = false;
+    let runId: string;
+    let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+    let fallbackProvider: string | undefined;
+    let fallbackModel: string | undefined;
+    let fallbackAttempts: RuntimeFallbackAttempt[] = [];
+    let directlySentBlockKeys: Set<string> | undefined;
+
+    if (!supervisorBypass) {
+      // Supervisor mode: run supervised reply turn
+      const supervisorConfig = resolveSupervisorConfig({
+        config: followupRun.run.config,
+        isHeartbeat,
+        isCliProvider: isCli,
+      });
+
+      if (supervisorConfig.enabled) {
+        const supervisedResult = await runSupervisedReplyTurn({
+          config: supervisorConfig,
+          commandBody,
+          followupRun,
+          sessionCtx,
+          typingSignals,
+          opts,
+          resolvedVerboseLevel,
+          isHeartbeat,
+        });
+
+        if (supervisedResult.kind === "final") {
+          return finalizeWithFollowup(supervisedResult.payload, queueKey, runFollowupTurn);
+        }
+
+        // Accepted: continue with the accepted outcome
+        const accepted = supervisedResult.workerOutcome;
+        runOutcome = {
+          kind: "success",
+          runId: crypto.randomUUID(),
+          runResult: {
+            payloads: accepted.payloads,
+            meta: {
+              durationMs: 0,
+              agentMeta: {
+                sessionId: followupRun.run.sessionId,
+                usage: undefined,
+                promptTokens: undefined,
+                model: followupRun.run.model,
+                provider: followupRun.run.provider,
+              },
+            },
+          },
+          didLogHeartbeatStrip: false,
+          autoCompactionCompleted: false,
+          directlySentBlockKeys: new Set(),
+        } as AgentRunLoopResult;
+        fallbackProvider = followupRun.run.provider;
+        fallbackModel = followupRun.run.model;
+        fallbackAttempts = [];
+        directlySentBlockKeys = new Set();
+        supervisorCompleted = true;
+      }
+    }
+
+    // Skip normal agent run if supervisor completed
+    if (!supervisorCompleted) {
+      // Normal mode: run without supervisor
+      runOutcome = await runAgentTurnWithFallback({
+        commandBody,
+        followupRun,
+        sessionCtx,
+        opts,
+        typingSignals,
+        blockReplyPipeline,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        applyReplyToMode,
+        shouldEmitToolResult,
+        shouldEmitToolOutput,
+        pendingToolTasks,
+        resetSessionAfterCompactionFailure,
+        resetSessionAfterRoleOrderingConflict,
+        isHeartbeat,
+        sessionKey,
+        getActiveSessionEntry: () => activeSessionEntry,
+        activeSessionStore,
+        storePath,
+        resolvedVerboseLevel,
+      });
+    }
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const {
+    ({
       runId,
       runResult,
       fallbackProvider,
       fallbackModel,
       fallbackAttempts,
       directlySentBlockKeys,
-    } = runOutcome;
+    } = runOutcome);
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (

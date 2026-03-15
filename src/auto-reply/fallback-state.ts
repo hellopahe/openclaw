@@ -44,6 +44,10 @@ function formatFallbackAttemptSummary(attempt: RuntimeFallbackAttempt): string {
 }
 
 export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
+  // Guard against undefined or empty array
+  if (!attempts || attempts.length === 0) {
+    return "selected model unavailable";
+  }
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
     ? formatFallbackAttemptReason(firstAttempt)

@@ -413,6 +413,9 @@ export async function runReplyAgent(params: {
           `Supervisor ACCEPTED at pass ${supervisedResult.acceptedPass}, continuing with worker outcome`,
         );
         const accepted = supervisedResult.workerOutcome;
+        supervisorLog.info(
+          `Supervisor workerOutcome: kind=${accepted.kind}, payloads.length=${accepted.payloads?.length}, finalPayload.text=${accepted.finalPayload?.text?.slice(0, 50)}`,
+        );
         runOutcome = {
           kind: "success",
           runId: crypto.randomUUID(),

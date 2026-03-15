@@ -17,7 +17,6 @@ import type {
   SupervisorDraftMaterial,
   SupervisorPassRecord,
   SupervisorVerdict,
-  SupervisorVerdictReject,
 } from "./supervisor-types.js";
 import { runDeterministicChecks } from "./supervisor-verdict.js";
 import type { TypingSignaler } from "./typing-mode.js";

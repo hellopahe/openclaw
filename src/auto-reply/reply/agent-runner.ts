@@ -420,7 +420,7 @@ export async function runReplyAgent(params: {
           kind: "success",
           runId: crypto.randomUUID(),
           runResult: {
-            payloads: accepted.payloads,
+            payloads: accepted.payloads ?? [],
             meta: {
               durationMs: 0,
               agentMeta: {
@@ -431,6 +431,12 @@ export async function runReplyAgent(params: {
                 provider: followupRun.run.provider,
               },
             },
+            // Supervisor mode: no messaging tool sends tracked
+            didSendViaMessagingTool: undefined,
+            messagingToolSentTexts: undefined,
+            messagingToolSentMediaUrls: undefined,
+            messagingToolSentTargets: undefined,
+            successfulCronAdds: undefined,
           },
           didLogHeartbeatStrip: false,
           autoCompactionCompleted: false,
@@ -509,7 +515,22 @@ export async function runReplyAgent(params: {
       }
     }
 
+    // Defensive: ensure runResult is defined
+    if (!runResult) {
+      supervisorLog.error("runResult is undefined after supervisor completion");
+      return finalizeWithFollowup(
+        { text: "Error: Supervisor returned invalid result" },
+        queueKey,
+        runFollowupTurn,
+      );
+    }
+
     const payloadArray = runResult.payloads ?? [];
+    if (supervisorCompleted) {
+      supervisorLog.info(
+        `Payloads after supervisor build: payloadArray.length=${payloadArray.length}, first.text=${payloadArray[0]?.text?.slice(0, 30)}`,
+      );
+    }
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });

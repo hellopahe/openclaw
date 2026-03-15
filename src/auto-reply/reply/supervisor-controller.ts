@@ -140,13 +140,13 @@ export async function runSupervisedReplyTurn(params: {
 
     // Check for final result (error or explicit final)
     if (workerOutcome.kind === "final") {
-      const errorPayload = workerOutcome.payloads[0];
+      const errorPayload = workerOutcome.payloads?.[0];
       log.error(
         `[pass ${pass}] Worker returned final with error: ${errorPayload?.text ?? "unknown"}`,
       );
       return {
         kind: "final",
-        payload: workerOutcome.payloads[0] ?? { text: "Error" },
+        payload: workerOutcome.payloads?.[0] ?? { text: "Error" },
         history,
       };
     }
@@ -157,7 +157,7 @@ export async function runSupervisedReplyTurn(params: {
 
     const draft = buildSupervisorDraftMaterial({
       draftText,
-      payloads: workerOutcome.payloads,
+      payloads: workerOutcome.payloads ?? [],
       provider: followupRun.run.provider,
       model: followupRun.run.model,
       authProfileId: followupRun.run.authProfileId,
@@ -215,7 +215,7 @@ export async function runSupervisedReplyTurn(params: {
         workerOutcome: {
           kind: "success",
           finalPayload: workerOutcome.finalPayload,
-          payloads: workerOutcome.payloads,
+          payloads: workerOutcome.payloads ?? [],
         },
         history,
       };

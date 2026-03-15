@@ -532,6 +532,7 @@ export const dispatchTelegramMessage = async ({
 
   let dispatchError: unknown;
   try {
+    logVerbose(`telegram dispatch: entering dispatchReplyWithBufferedBlockDispatcher`);
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
@@ -539,6 +540,9 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          logVerbose(
+            `telegram deliver callback: START kind=${info.kind}, payload.text=${payload?.text?.slice(0, 50)}, payload.mediaUrl=${payload?.mediaUrl}`,
+          );
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
@@ -552,14 +556,24 @@ export const dispatchTelegramMessage = async ({
             })
           ) {
             queuedFinal = true;
+            logVerbose(`telegram deliver: suppressed exec approval prompt, returning early`);
             return;
           }
+          logVerbose(
+            `telegram deliver: processing payload, text length=${payload.text?.length}, mediaUrl=${payload.mediaUrl}`,
+          );
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
+          logVerbose(
+            `telegram deliver: split result - segments.length=${segments.length}, suppressedReasoningOnly=${split.suppressedReasoningOnly}`,
+          );
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          logVerbose(
+            `telegram deliver: hasMedia=${hasMedia}, canSendAsIs check: hasMedia=${hasMedia}, hasText=${typeof payload.text === "string" && payload.text.length > 0}`,
+          );
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -581,12 +595,19 @@ export const dispatchTelegramMessage = async ({
             reasoningStepState.resetForNextStep();
           };
 
+          logVerbose(
+            `telegram deliver: entering segments loop, segments.length=${segments.length}`,
+          );
           for (const segment of segments) {
+            logVerbose(
+              `telegram deliver: processing segment lane=${segment.lane}, text=${segment.text?.slice(0, 30)}`,
+            );
             if (
               segment.lane === "answer" &&
               info.kind === "final" &&
               reasoningStepState.shouldBufferFinalAnswer()
             ) {
+              logVerbose(`telegram deliver: buffering final answer`);
               reasoningStepState.bufferFinalAnswer({
                 payload,
                 text: segment.text,
@@ -604,6 +625,9 @@ export const dispatchTelegramMessage = async ({
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
+            logVerbose(
+              `telegram deliver: deliverLaneText result=${result} for lane=${segment.lane}`,
+            );
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
@@ -647,7 +671,12 @@ export const dispatchTelegramMessage = async ({
             }
             return;
           }
+          // DEBUG: log payload before sending
+          logVerbose(
+            `telegram: about to send payload, text=${payload.text?.slice(0, 30)}, mediaUrl=${payload.mediaUrl}`,
+          );
           await sendPayload(payload);
+          logVerbose(`telegram: sendPayload completed successfully`);
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
@@ -729,9 +758,15 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+    logVerbose(
+      `telegram dispatch: dispatchReplyWithBufferedBlockDispatcher returned, queuedFinal=${queuedFinal}`,
+    );
   } catch (err) {
     dispatchError = err;
-    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    // Log detailed error info for debugging
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error ? err.stack : "";
+    runtime.error?.(danger(`telegram dispatch failed: ${errorMsg} | stack: ${errorStack}`));
   } finally {
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
@@ -803,14 +838,20 @@ export const dispatchTelegramMessage = async ({
     (!deliverySummary.delivered &&
       (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
   ) {
+    // DEBUG: Log why fallback is triggered
+    logVerbose(
+      `telegram: fallback triggered, dispatchError=${!!dispatchError}, delivered=${deliverySummary.delivered}, skipped=${deliverySummary.skippedNonSilent}, failed=${deliverySummary.failedNonSilent}`,
+    );
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
+    logVerbose(`telegram: sending fallback text: ${fallbackText.slice(0, 30)}`);
     const result = await deliverReplies({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
     });
     sentFallback = result.delivered;
+    logVerbose(`telegram: fallback delivery result: delivered=${result.delivered}`);
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;

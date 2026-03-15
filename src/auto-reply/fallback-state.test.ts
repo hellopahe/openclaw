@@ -4,6 +4,7 @@ import {
   resolveFallbackTransition,
   type FallbackNoticeState,
 } from "./fallback-state.js";
+import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
 
 const baseAttempt = {
   provider: "fireworks",
@@ -119,5 +120,19 @@ describe("fallback-state", () => {
     expect(resolved.nextState.selectedModel).toBeUndefined();
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
+  });
+
+  it("tolerates missing attempt metadata", () => {
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "anthropic",
+      selectedModel: "claude-sonnet-4-5",
+      activeProvider: "anthropic",
+      activeModel: "claude-sonnet-4-5",
+      attempts: undefined as unknown as RuntimeFallbackAttempt[],
+      state: {},
+    });
+
+    expect(resolved.reasonSummary).toBe("selected model unavailable");
+    expect(resolved.attemptSummaries).toEqual([]);
   });
 });

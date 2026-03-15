@@ -438,6 +438,9 @@ export async function runReplyAgent(params: {
             messagingToolSentTargets: undefined,
             successfulCronAdds: undefined,
           },
+          fallbackProvider: followupRun.run.provider,
+          fallbackModel: followupRun.run.model,
+          fallbackAttempts: [],
           didLogHeartbeatStrip: false,
           autoCompactionCompleted: false,
           directlySentBlockKeys: new Set(),
@@ -482,14 +485,12 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    ({
-      runId,
-      runResult,
-      fallbackProvider,
-      fallbackModel,
-      fallbackAttempts,
-      directlySentBlockKeys,
-    } = runOutcome);
+    ({ runId, runResult, directlySentBlockKeys } = runOutcome);
+    fallbackProvider = runOutcome.fallbackProvider ?? followupRun.run.provider;
+    fallbackModel = runOutcome.fallbackModel ?? followupRun.run.model;
+    fallbackAttempts = Array.isArray(runOutcome.fallbackAttempts)
+      ? runOutcome.fallbackAttempts
+      : [];
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (

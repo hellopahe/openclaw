@@ -15,6 +15,7 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const runSupervisedReplyTurnMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -67,6 +68,16 @@ vi.mock("./queue.js", async () => {
   };
 });
 
+vi.mock("./supervisor-controller.js", async () => {
+  const actual = await vi.importActual<typeof import("./supervisor-controller.js")>(
+    "./supervisor-controller.js",
+  );
+  return {
+    ...actual,
+    runSupervisedReplyTurn: (params: unknown) => runSupervisedReplyTurnMock(params),
+  };
+});
+
 const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", async () => {
   const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
@@ -89,6 +100,7 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  runSupervisedReplyTurnMock.mockReset();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -313,6 +325,91 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     expect(call.provider).toBe("openai-codex");
     expect(call.authProfileId).toBeUndefined();
     expect(call.authProfileIdSource).toBeUndefined();
+  });
+});
+
+describe("runReplyAgent supervisor acceptance", () => {
+  function createRun() {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "telegram:chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "test",
+      summaryLine: "test",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session-supervisor",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {
+          agents: {
+            defaults: {
+              supervisor: {
+                enabled: true,
+              },
+            },
+          },
+        },
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "test",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-sonnet-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("delivers an accepted supervisor payload without fallback metadata crashes", async () => {
+    runSupervisedReplyTurnMock.mockResolvedValueOnce({
+      kind: "accepted",
+      acceptedPass: 1,
+      workerOutcome: {
+        kind: "success",
+        finalPayload: { text: "收到，测试通过。" },
+        payloads: [{ text: "收到，测试通过。" }],
+      },
+      history: [],
+    });
+
+    const result = await createRun();
+
+    expect(result).toMatchObject({ text: "收到，测试通过。" });
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 });
 

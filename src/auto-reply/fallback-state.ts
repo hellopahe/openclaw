@@ -56,7 +56,12 @@ export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): 
   return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
 }
 
-export function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
+export function buildFallbackAttemptSummaries(
+  attempts: RuntimeFallbackAttempt[] | undefined,
+): string[] {
+  if (!Array.isArray(attempts) || attempts.length === 0) {
+    return [];
+  }
   return attempts.map((attempt) =>
     truncateFallbackReasonPart(formatFallbackAttemptSummary(attempt)),
   );

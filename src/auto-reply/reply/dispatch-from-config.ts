@@ -238,6 +238,15 @@ export async function dispatchReplyFromConfig(params: {
     originatingTo &&
     originatingChannel !== currentSurface,
   );
+
+  // Debug logging for routing decision
+  logVerbose(
+    `dispatch-from-config: routing decision - shouldRouteToOriginating=${shouldRouteToOriginating}, ` +
+      `originatingChannel=${originatingChannel}, currentSurface=${currentSurface}, ` +
+      `originatingTo=${originatingTo}, isInternalWebchatTurn=${isInternalWebchatTurn}, ` +
+      `isRoutableChannel=${isRoutableChannel(originatingChannel)}`,
+  );
+
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
@@ -431,8 +440,14 @@ export async function dispatchReplyFromConfig(params: {
               return;
             }
             if (shouldRouteToOriginating) {
+              logVerbose(
+                `dispatch-from-config: sending tool result via routeReply to ${originatingChannel}`,
+              );
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
+              logVerbose(
+                `dispatch-from-config: sending tool result via internal dispatcher (channel=${currentSurface})`,
+              );
               dispatcher.sendToolResult(deliveryPayload);
             }
           };
@@ -463,8 +478,14 @@ export async function dispatchReplyFromConfig(params: {
               ttsAuto: sessionTtsAuto,
             });
             if (shouldRouteToOriginating) {
+              logVerbose(
+                `dispatch-from-config: sending block reply via routeReply to ${originatingChannel}`,
+              );
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
+              logVerbose(
+                `dispatch-from-config: sending block reply via internal dispatcher (channel=${currentSurface})`,
+              );
               dispatcher.sendBlockReply(ttsPayload);
             }
           };

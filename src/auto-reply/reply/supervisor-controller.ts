@@ -1,5 +1,6 @@
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -16,9 +17,43 @@ import type {
   SupervisorDraftMaterial,
   SupervisorPassRecord,
   SupervisorVerdict,
+  SupervisorVerdictReject,
 } from "./supervisor-types.js";
 import { runDeterministicChecks } from "./supervisor-verdict.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+// Supervisor subsystem logger
+const log = createSubsystemLogger("supervisor");
+
+/**
+ * Truncate text for safe logging (avoid dumping full prompts/drafts)
+ */
+function truncateForLog(text: string, maxLen: number = 200): string {
+  if (text.length <= maxLen) {
+    return text;
+  }
+  return text.slice(0, maxLen) + "...";
+}
+
+/**
+ * Log a supervisor verdict at info level
+ */
+function logVerdict(verdict: SupervisorVerdict, pass: number): void {
+  if (verdict.decision === "accept") {
+    log.info(`[pass ${pass}] Supervisor ${verdict.source} ACCEPTED: ${verdict.summary}`);
+  } else {
+    const reject = verdict;
+    log.info(
+      `[pass ${pass}] Supervisor ${verdict.source} REJECTED: ${reject.summary} (severity: ${reject.severity ?? "none"})`,
+    );
+    if (reject.reasons.length > 0) {
+      log.info(`[pass ${pass}] Reasons: ${reject.reasons.join("; ")}`);
+    }
+    if (reject.revisionInstructions.length > 0) {
+      log.info(`[pass ${pass}] Revision instructions: ${reject.revisionInstructions.join("; ")}`);
+    }
+  }
+}
 
 /**
  * Create a config with tool deny list for worker draft mode
@@ -80,7 +115,14 @@ export async function runSupervisedReplyTurn(params: {
   const history: SupervisorPassRecord[] = [];
   let workerPrompt = commandBody;
 
+  log.info(`Starting supervised reply with maxPasses=${config.maxPasses}`);
+
   for (let pass = 1; pass <= config.maxPasses; pass++) {
+    // Log worker pass start
+    log.info(
+      `[pass ${pass}/${config.maxPasses}] Worker starting (prompt: ${truncateForLog(workerPrompt, 100)})`,
+    );
+
     // Run worker
     const workerOutcome = await runWorker({
       prompt: workerPrompt,
@@ -94,8 +136,15 @@ export async function runSupervisedReplyTurn(params: {
       pass,
     });
 
+    // Log worker completion
+    log.info(`[pass ${pass}] Worker completed (kind: ${workerOutcome.kind})`);
+
     // Check for final result (error or explicit final)
     if (workerOutcome.kind === "final") {
+      const errorPayload = workerOutcome.payloads[0];
+      log.error(
+        `[pass ${pass}] Worker returned final with error: ${errorPayload?.text ?? "unknown"}`,
+      );
       return {
         kind: "final",
         payload: workerOutcome.payloads[0] ?? { text: "Error" },
@@ -105,6 +154,8 @@ export async function runSupervisedReplyTurn(params: {
 
     // Extract draft material
     const draftText = extractDraftTextFromPayloads(workerOutcome.payloads);
+    log.info(`[pass ${pass}] Draft ready (text length: ${draftText.length})`);
+
     const draft = buildSupervisorDraftMaterial({
       draftText,
       payloads: workerOutcome.payloads,
@@ -119,10 +170,18 @@ export async function runSupervisedReplyTurn(params: {
       enforceFinalTag: undefined, // TODO: add to config if needed
     });
 
+    // Log deterministic check result
+    if (deterministicResult.ok) {
+      log.info(`[pass ${pass}] Deterministic check PASSED`);
+    } else {
+      log.info(`[pass ${pass}] Deterministic check FAILED: ${deterministicResult.verdict.summary}`);
+    }
+
     // Determine verdict
     let verdict;
     if (deterministicResult.ok) {
       // Run supervisor reviewer
+      log.info(`[pass ${pass}] Running reviewer...`);
       verdict = await runSupervisorReview({
         originalTask: commandBody,
         draft,
@@ -137,6 +196,9 @@ export async function runSupervisedReplyTurn(params: {
       verdict = deterministicResult.verdict;
     }
 
+    // Log verdict
+    logVerdict(verdict, pass);
+
     // Record pass
     history.push({
       pass,
@@ -147,6 +209,7 @@ export async function runSupervisedReplyTurn(params: {
 
     // Handle verdict
     if (verdict.decision === "accept") {
+      log.info(`[pass ${pass}] Draft ACCEPTED - will send to user`);
       return {
         kind: "accepted",
         acceptedPass: pass,
@@ -161,6 +224,7 @@ export async function runSupervisedReplyTurn(params: {
 
     // Check if we've reached max passes
     if (pass >= config.maxPasses) {
+      log.warn(`[pass ${pass}] Max passes (${config.maxPasses}) exceeded - returning error`);
       return {
         kind: "final",
         payload: buildMaxPassesExceededPayload(history),
@@ -169,11 +233,13 @@ export async function runSupervisedReplyTurn(params: {
     }
 
     // Build revision prompt for next pass
+    log.info(`[pass ${pass}] Building revision prompt for next pass...`);
     workerPrompt = buildRevisionPrompt({
       originalTask: commandBody,
       latestVerdict: verdict,
       rejectHistory: history.map((h) => h.verdict),
     });
+    log.info(`[pass ${pass}] Revision prompt prepared (length: ${workerPrompt.length})`);
   }
 
   // Should not reach here, but handle gracefully
@@ -352,10 +418,12 @@ async function runSupervisorReview(params: {
     return parseSupervisorVerdict(outputText);
   } catch (error) {
     // Return parser error verdict
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log.error(`Reviewer failed: ${errorMessage}`);
     return {
       decision: "reject",
       summary: "Supervisor Error",
-      reasons: [`Review failed: ${error instanceof Error ? error.message : String(error)}`],
+      reasons: [`Review failed: ${errorMessage}`],
       revisionInstructions: ["Please try again"],
       severity: "high",
       source: "parser",

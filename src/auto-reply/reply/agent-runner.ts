@@ -19,6 +19,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -63,6 +64,9 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+// Supervisor subsystem logger
+const supervisorLog = createSubsystemLogger("supervisor");
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -357,6 +361,17 @@ export async function runReplyAgent(params: {
       isCliProvider: isCli,
     });
 
+    // Log supervisor bypass decision
+    if (supervisorBypass) {
+      supervisorLog.info(
+        `Supervisor BYPASSED: heartbeat=${isHeartbeat}, isCli=${isCli}, sessionId=${followupRun.run.sessionId}`,
+      );
+    } else {
+      supervisorLog.info(
+        `Supervisor enabled for this turn: sessionId=${followupRun.run.sessionId}`,
+      );
+    }
+
     let runOutcome!: AgentRunLoopResult;
     let supervisorCompleted = false;
     let runId: string;
@@ -387,10 +402,16 @@ export async function runReplyAgent(params: {
         });
 
         if (supervisedResult.kind === "final") {
+          supervisorLog.info(
+            `Supervisor returned final result: ${supervisedResult.payload?.text?.slice(0, 100)}`,
+          );
           return finalizeWithFollowup(supervisedResult.payload, queueKey, runFollowupTurn);
         }
 
         // Accepted: continue with the accepted outcome
+        supervisorLog.info(
+          `Supervisor ACCEPTED at pass ${supervisedResult.acceptedPass}, continuing with worker outcome`,
+        );
         const accepted = supervisedResult.workerOutcome;
         runOutcome = {
           kind: "success",

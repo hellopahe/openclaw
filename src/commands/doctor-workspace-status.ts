@@ -1,7 +1,8 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { discoverOpenClawPlugins } from "../plugins/discovery.js";
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
@@ -25,41 +26,28 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     "Skills status",
   );
 
-  const pluginRegistry = loadOpenClawPlugins({
-    config: cfg,
+  // Use discovery instead of loading to avoid blocking on plugin initialization
+  const discovery = discoverOpenClawPlugins({
     workspaceDir,
-    logger: {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
-    },
+    cache: false, // Force fresh discovery
   });
-  if (pluginRegistry.plugins.length > 0) {
-    const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
-    const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
-    const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
+  const normalized = normalizePluginsConfig(cfg.plugins);
 
-    const lines = [
-      `Loaded: ${loaded.length}`,
-      `Disabled: ${disabled.length}`,
-      `Errors: ${errored.length}`,
-      errored.length > 0
-        ? `- ${errored
-            .slice(0, 10)
-            .map((p) => p.id)
-            .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`
-        : null,
-    ].filter((line): line is string => Boolean(line));
+  if (discovery.candidates.length > 0) {
+    const discovered = discovery.candidates.length;
+    const enabled = discovery.candidates.filter((c) => {
+      const effectiveEnabled = normalized.entries?.[c.idHint]?.enabled ?? false;
+      return effectiveEnabled;
+    }).length;
 
+    const lines = [`Discovered: ${discovered}`, `Enabled: ${enabled}`];
     note(lines.join("\n"), "Plugins");
   }
-  if (pluginRegistry.diagnostics.length > 0) {
-    const lines = pluginRegistry.diagnostics.map((diag) => {
+  if (discovery.diagnostics.length > 0) {
+    const lines = discovery.diagnostics.map((diag) => {
       const prefix = diag.level.toUpperCase();
       const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
-      const source = diag.source ? ` (${diag.source})` : "";
-      return `- ${prefix}${plugin}: ${diag.message}${source}`;
+      return `- ${prefix}${plugin}: ${diag.message}`;
     });
     note(lines.join("\n"), "Plugin diagnostics");
   }

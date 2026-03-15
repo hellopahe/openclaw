@@ -192,6 +192,16 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    supervisor: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxPasses: z.number().int().positive().optional(),
+        workerToolDeny: z.array(z.string()).optional(),
+        extraReviewerPrompt: z.string().optional(),
+        maxRejectHistory: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

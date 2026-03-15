@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout, clearTimeout } from "node:timers";
 import type { loadConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
@@ -161,7 +163,9 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
 
 // ── Plugin loading ──────────────────────────────────────────────────
 
-export function loadGatewayPlugins(params: {
+const PLUGIN_LOAD_TIMEOUT_MS = 30_000; // 30 seconds timeout for plugin loading
+
+export async function loadGatewayPlugins(params: {
   cfg: ReturnType<typeof loadConfig>;
   workspaceDir: string;
   log: {
@@ -173,20 +177,54 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
 }) {
-  const pluginRegistry = loadOpenClawPlugins({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    logger: {
-      info: (msg) => params.log.info(msg),
-      warn: (msg) => params.log.warn(msg),
-      error: (msg) => params.log.error(msg),
-      debug: (msg) => params.log.debug(msg),
-    },
-    coreGatewayHandlers: params.coreGatewayHandlers,
-    runtimeOptions: {
-      subagent: createGatewaySubagentRuntime(),
-    },
-  });
+  params.log.info("Loading plugins...");
+
+  // Wrap plugin loading in a timeout to prevent hanging
+  const loadWithTimeout = async () => {
+    return new Promise<ReturnType<typeof loadOpenClawPlugins>>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Plugin loading timed out after ${PLUGIN_LOAD_TIMEOUT_MS}ms`));
+      }, PLUGIN_LOAD_TIMEOUT_MS);
+
+      try {
+        const registry = loadOpenClawPlugins({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          logger: {
+            info: (msg) => params.log.info(msg),
+            warn: (msg) => params.log.warn(msg),
+            error: (msg) => params.log.error(msg),
+            debug: (msg) => params.log.debug(msg),
+          },
+          coreGatewayHandlers: params.coreGatewayHandlers,
+          runtimeOptions: {
+            subagent: createGatewaySubagentRuntime(),
+          },
+        });
+        clearTimeout(timeout);
+        resolve(registry);
+      } catch (err) {
+        clearTimeout(timeout);
+        reject(err);
+      }
+    });
+  };
+
+  let pluginRegistry: Awaited<ReturnType<typeof loadWithTimeout>>;
+  try {
+    pluginRegistry = await loadWithTimeout();
+  } catch (err) {
+    params.log.error(`Plugin loading failed: ${err instanceof Error ? err.message : String(err)}`);
+    // Return empty registry to allow gateway to start without plugins
+    params.log.warn("Starting gateway with no plugins due to loading failure");
+    return {
+      pluginRegistry: createEmptyPluginRegistry(),
+      gatewayMethods: params.baseMethods,
+    };
+  }
+
+  params.log.info(`Loaded ${pluginRegistry.plugins.length} plugins`);
+
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
   if (pluginRegistry.diagnostics.length > 0) {

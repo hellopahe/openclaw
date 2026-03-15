@@ -470,7 +470,7 @@ export async function startGatewayServer(
   const emptyPluginRegistry = createEmptyPluginRegistry();
   const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
     ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : loadGatewayPlugins({
+    : await loadGatewayPlugins({
         cfg: cfgAtStart,
         workspaceDir: defaultWorkspaceDir,
         log,

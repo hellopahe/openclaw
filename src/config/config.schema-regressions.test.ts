@@ -224,4 +224,36 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts agents.defaults.supervisor config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          supervisor: {
+            enabled: true,
+            maxPasses: 3,
+            workerToolDeny: ["message", "send"],
+            extraReviewerPrompt: "Be critical of the draft",
+            maxRejectHistory: 5,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.defaults.supervisor with minimal config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          supervisor: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
